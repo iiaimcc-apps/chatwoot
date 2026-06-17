@@ -34,10 +34,17 @@ module Llm::Config
     def configure_ruby_llm
       RubyLLM.configure do |config|
         config.openai_api_key = system_api_key if system_api_key.present?
-        config.openai_api_base = openai_endpoint.chomp('/') if openai_endpoint.present?
+        config.openai_api_base = normalize_api_base(openai_endpoint) if openai_endpoint.present?
         config.model_registry_file = Rails.root.join('config/llm_models.json').to_s
         config.logger = Rails.logger
       end
+    end
+
+    def normalize_api_base(url)
+      url = url.chomp('/')
+      url = url.sub(%r{/chat/completions$}, '')
+      url = url.sub(%r{/v1$}, '')
+      "#{url}/v1"
     end
 
     def system_api_key

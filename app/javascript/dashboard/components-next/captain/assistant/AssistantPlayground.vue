@@ -47,9 +47,39 @@ watch(
   }
 );
 
+const formatErrorDetails = data => {
+  const sections = [`**Error:** ${data.error_message || 'Unknown error'}`];
+
+  if (data.response) {
+    sections.push(`**Message:** ${data.response}`);
+  }
+
+  const debug = data.debug_info;
+  if (debug) {
+    const details = [
+      `Request URL: ${debug.request_url || 'N/A'}`,
+      `API base: ${debug.api_base || 'N/A'}`,
+      `Provider: ${debug.provider || 'N/A'}`,
+      `Model: ${debug.model || 'N/A'}`,
+      `Response status: ${debug.response_status || 'N/A'}`,
+    ].join('\n');
+    sections.push(`**Debug Info:**\n${details}`);
+
+    if (debug.response_body) {
+      const body = typeof debug.response_body === 'string'
+        ? debug.response_body
+        : JSON.stringify(debug.response_body, null, 2);
+      sections.push(`**Response Body:**\n${body}`);
+    }
+  }
+
+  return sections.join('\n\n');
+};
+
 const sendMessage = async () => {
   if (!newMessage.value.trim() || isLoading.value) return;
 
+  const messageHistory = formatMessagesForApi();
   const userMessage = {
     content: newMessage.value,
     sender: 'user',
@@ -64,16 +94,36 @@ const sendMessage = async () => {
     const { data } = await CaptainAssistant.playground({
       assistantId,
       messageContent: currentMessage,
-      messageHistory: formatMessagesForApi(),
+      messageHistory,
     });
 
-    messages.value.push({
-      content: data.response,
-      sender: 'assistant',
-      agentName: data.agent_name,
-      timestamp: new Date().toISOString(),
-    });
+    if (data.error) {
+      messages.value.push({
+        content: formatErrorDetails(data),
+        sender: 'assistant',
+        timestamp: new Date().toISOString(),
+        isError: true,
+      });
+    } else {
+      messages.value.push({
+        content: data.response,
+        sender: 'assistant',
+        agentName: data.agent_name,
+        timestamp: new Date().toISOString(),
+      });
+    }
   } catch (error) {
+    const errorMessage =
+      error.response?.data?.error_message ||
+      error.response?.data?.message ||
+      error.message ||
+      t('CAPTAIN.PLAYGROUND.ERROR_MESSAGE');
+    messages.value.push({
+      content: `❌ **Error:** ${errorMessage}`,
+      sender: 'assistant',
+      timestamp: new Date().toISOString(),
+      isError: true,
+    });
     // eslint-disable-next-line no-console
     console.error('Error getting assistant response:', error);
   } finally {

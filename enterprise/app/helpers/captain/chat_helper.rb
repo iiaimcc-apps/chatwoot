@@ -15,6 +15,10 @@ module Captain::ChatHelper
       response = attachments.any? ? chat.ask(text, with: attachments) : chat.ask(text)
       build_response(response)
     end
+  rescue RubyLLM::Error => e
+    handle_llm_error(e)
+  rescue NoMethodError => e
+    handle_parsing_error(e)
   rescue StandardError => e
     Rails.logger.error "#{self.class.name} Assistant: #{@assistant.id}, Error in chat completion: #{e}"
     raise e
@@ -131,5 +135,68 @@ module Captain::ChatHelper
 
   def log_chat_completion_request
     Rails.logger.info("#{self.class.name} Assistant: #{@assistant.id}, requesting completion for #{@messages} with #{@tools&.length || 0} tools")
+  end
+
+  def handle_llm_error(error)
+    error_details = extract_error_details(error)
+    Rails.logger.error "#{self.class.name} Assistant: #{@assistant.id}, LLM API Error: #{error.class} - #{error.message}"
+
+    {
+      'error' => true,
+      'error_type' => error.class.name,
+      'error_message' => error.message,
+      'error_details' => error_details,
+      'response' => "API Error: #{error.message}",
+      'debug_info' => {
+        request_url: llm_request_url,
+        api_base: llm_api_base,
+        provider: determine_provider(@model).to_s,
+        model: @model,
+        response_status: error_details[:status],
+        response_body: error_details[:body]
+      }
+    }
+  end
+
+  def handle_parsing_error(error)
+    Rails.logger.error "#{self.class.name} Assistant: #{@assistant.id}, Response parsing error: #{error.class} - #{error.message}"
+    Rails.logger.error "Backtrace: #{error.backtrace.first(5).join("\n")}"
+
+    {
+      'error' => true,
+      'error_type' => 'ResponseParsingError',
+      'error_message' => "Failed to parse API response: #{error.message}",
+      'response' => "Error: The API returned an unexpected response format.",
+      'debug_info' => {
+        request_url: llm_request_url,
+        api_base: llm_api_base,
+        provider: determine_provider(@model).to_s,
+        model: @model
+      }
+    }
+  end
+
+  def extract_error_details(error)
+    details = {}
+
+    if error.respond_to?(:response) && error.response
+      response = error.response
+      details[:status] = response.status if response.respond_to?(:status)
+      details[:body] = response.body if response.respond_to?(:body)
+    end
+
+    details
+  rescue StandardError => e
+    Rails.logger.warn "Failed to extract error details: #{e.message}"
+    {}
+  end
+
+  def llm_request_url
+    "#{llm_api_base}/chat/completions"
+  end
+
+  def llm_api_base
+    InstallationConfig.find_by(name: 'CAPTAIN_OPEN_AI_ENDPOINT')&.value.presence&.chomp('/') ||
+      'https://api.openai.com/v1'
   end
 end

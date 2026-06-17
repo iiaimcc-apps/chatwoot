@@ -33,10 +33,14 @@ const getAvatarName = sender =>
     ? t('CAPTAIN.PLAYGROUND.USER')
     : t('CAPTAIN.PLAYGROUND.ASSISTANT');
 
-const getMessageStyle = sender =>
-  isUserMessage(sender)
+const getMessageStyle = (sender, isError) => {
+  if (isError) {
+    return 'bg-n-ruby-3 text-n-ruby-11 border border-n-ruby-6 rounded-bl-sm rounded-br-xl rounded-t-xl whitespace-pre-wrap font-mono';
+  }
+  return isUserMessage(sender)
     ? 'bg-n-solid-blue text-n-slate-12 rounded-br-sm rounded-bl-xl rounded-t-xl'
     : 'bg-n-solid-iris text-n-slate-12 rounded-bl-sm rounded-br-xl rounded-t-xl';
+};
 
 const scrollToBottom = async () => {
   await nextTick();
@@ -71,7 +75,7 @@ watch(() => props.messages.length, scrollToBottom);
         />
         <div
           class="px-4 py-3 text-sm [overflow-wrap:break-word]"
-          :class="getMessageStyle(message.sender)"
+          :class="getMessageStyle(message.sender, message.isError)"
         >
           <div v-html="formatMessage(message.content)" />
         </div>
