@@ -97,10 +97,23 @@ class Captain::Assistant::AgentRunnerService
   def process_agent_result(result)
     Rails.logger.info "[Captain V2] Agent result: #{result.inspect}"
     output = result.output
-    response = output.is_a?(Hash) ? output.with_indifferent_access : { 'response' => output.to_s, 'reasoning' => 'Processed by agent' }
+    response = normalized_agent_response(output)
     response['agent_name'] = result.context&.dig(:current_agent)
     response['handoff_tool_called'] = result.context&.dig(:captain_v2_handoff_tool_called) || false
     response
+  end
+
+  def normalized_agent_response(output)
+    response = output.is_a?(Hash) ? output.with_indifferent_access : { 'response' => output.to_s, 'reasoning' => 'Processed by agent' }
+    response['response'] = extract_response_text(response)
+    return response if response['response'].present?
+
+    Rails.logger.error "[Captain V2] Agent returned blank response: #{output.inspect}"
+    error_response('Agent returned blank response')
+  end
+
+  def extract_response_text(response)
+    response.values_at('response', 'content', 'message', 'text').find(&:present?).to_s
   end
 
   def error_response(error_message)

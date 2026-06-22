@@ -217,6 +217,38 @@ RSpec.describe Captain::Assistant::AgentRunnerService do
       end
     end
 
+    context 'when agent result uses a content field' do
+      let(:mock_result) { instance_double(Agents::RunResult, output: { 'content' => 'Content response' }, context: nil) }
+
+      it 'uses the content as the response' do
+        result = service.generate_response(message_history: message_history)
+
+        expect(result).to eq({
+                               'content' => 'Content response',
+                               'response' => 'Content response',
+                               'agent_name' => nil,
+                               'handoff_tool_called' => false
+                             })
+      end
+    end
+
+    context 'when agent result is blank' do
+      let(:mock_result) { instance_double(Agents::RunResult, output: '', context: nil) }
+
+      it 'returns a handoff response instead of a blank message' do
+        expect(Rails.logger).to receive(:error).with('[Captain V2] Agent returned blank response: ""')
+
+        result = service.generate_response(message_history: message_history)
+
+        expect(result).to eq({
+                               'response' => 'conversation_handoff',
+                               'reasoning' => 'Error occurred: Agent returned blank response',
+                               'handoff_tool_called' => false,
+                               'agent_name' => nil
+                             })
+      end
+    end
+
     context 'when an error occurs' do
       let(:error) { StandardError.new('Test error') }
 
