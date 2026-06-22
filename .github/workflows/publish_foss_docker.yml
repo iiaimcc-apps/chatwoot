@@ -3,6 +3,10 @@
 # # This is set to run against merges to develop, master
 # # and when tags are created.
 # #
+# # - Always pushes to GHCR (uses GITHUB_TOKEN)
+# # - Pushes to DockerHub only if DOCKERHUB_USERNAME variable is configured
+# # - ARM builds disabled for private repos (not supported by GitHub Actions)
+# #
 
 name: Publish Chatwoot CE docker images
 
@@ -16,10 +20,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_REPO: chatwoot/chatwoot
-
-permissions:
-  contents: read
+  GHCR_REPO: ghcr.io/${{ github.repository_owner }}/chatwoot
 
 jobs:
   build:
@@ -29,9 +30,16 @@ jobs:
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
+          # ARM builds only for public repos (private repos don't support ARM runners)
           - platform: linux/arm64
             runner: ubuntu-22.04-arm
+            public_only: true
     runs-on: ${{ matrix.runner }}
+    # Skip ARM builds for private repos
+    if: ${{ !matrix.public_only || github.event.repository.visibility == 'public' }}
+    permissions:
+      contents: read
+      packages: write
     env:
       GIT_REF: ${{ github.head_ref || github.ref_name }}
     steps:
@@ -56,9 +64,9 @@ jobs:
         run: |
           SANITIZED_REF=$(echo "$GIT_REF" | sed 's/\//-/g')
           if [ "${{ github.ref_name }}" = "master" ]; then
-            echo "DOCKER_TAG=${DOCKER_REPO}:latest-ce" >> $GITHUB_ENV
+            echo "DOCKER_TAG=latest-ce" >> $GITHUB_ENV
           else
-            echo "DOCKER_TAG=${DOCKER_REPO}:${SANITIZED_REF}-ce" >> $GITHUB_ENV
+            echo "DOCKER_TAG=${SANITIZED_REF}-ce" >> $GITHUB_ENV
           fi
 
       - name: Set up QEMU
@@ -67,11 +75,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to DockerHub
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to DockerHub
+        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push by digest
@@ -81,8 +96,10 @@ jobs:
           context: .
           file: docker/Dockerfile
           platforms: ${{ matrix.platform }}
-          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-          outputs: type=image,name=${{ env.DOCKER_REPO }},push-by-digest=true,name-canonical=true,push=true
+          push: true
+          outputs: type=image,name=${{ env.GHCR_REPO }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}-ce
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}-ce
 
       - name: Export digest
         run: |
@@ -93,13 +110,16 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ env.PLATFORM_PAIR }}
+          name: digests-ce-${{ env.PLATFORM_PAIR }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
 
   merge:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     needs:
       - build
     steps:
@@ -107,42 +127,68 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          pattern: digests-ce-*
           merge-multiple: true
 
-      - name: Login to DockerHub
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to DockerHub
+        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Create manifest list and push
+      - name: Create manifest list and push to GHCR
         working-directory: ${{ runner.temp }}/digests
         env:
           GIT_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           SANITIZED_REF=$(echo "$GIT_REF" | sed 's/\//-/g')
           if [ "${{ github.ref_name }}" = "master" ]; then
-            TAG="${DOCKER_REPO}:latest-ce"
+            TAG="latest-ce"
           else
-            TAG="${DOCKER_REPO}:${SANITIZED_REF}-ce"
+            TAG="${SANITIZED_REF}-ce"
           fi
           
-          docker buildx imagetools create -t $TAG \
-            $(printf '${{ env.DOCKER_REPO }}@sha256:%s ' *)
+          docker buildx imagetools create -t ${{ env.GHCR_REPO }}:${TAG} \
+            $(printf '${{ env.GHCR_REPO }}@sha256:%s ' *)
 
-      - name: Inspect image
+      - name: Push to DockerHub
+        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          GIT_REF: ${{ github.head_ref || github.ref_name }}
+          DOCKERHUB_REPO: ${{ vars.DOCKERHUB_USERNAME }}/chatwoot
+        run: |
+          SANITIZED_REF=$(echo "$GIT_REF" | sed 's/\//-/g')
+          if [ "${{ github.ref_name }}" = "master" ]; then
+            TAG="latest-ce"
+          else
+            TAG="${SANITIZED_REF}-ce"
+          fi
+          
+          # Re-tag and push to DockerHub
+          docker buildx imagetools create -t ${DOCKERHUB_REPO}:${TAG} \
+            $(printf '${{ env.GHCR_REPO }}@sha256:%s ' *)
+
+      - name: Inspect GHCR image
         env:
           GIT_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           SANITIZED_REF=$(echo "$GIT_REF" | sed 's/\//-/g')
           if [ "${{ github.ref_name }}" = "master" ]; then
-            TAG="${DOCKER_REPO}:latest-ce"
+            TAG="latest-ce"
           else
-            TAG="${DOCKER_REPO}:${SANITIZED_REF}-ce"
+            TAG="${SANITIZED_REF}-ce"
           fi
           
-          docker buildx imagetools inspect $TAG
+          docker buildx imagetools inspect ${{ env.GHCR_REPO }}:${TAG}
