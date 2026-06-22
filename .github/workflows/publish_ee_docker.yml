@@ -23,20 +23,27 @@ env:
   GHCR_REPO: ghcr.io/${{ github.repository_owner }}/chatwoot
 
 jobs:
+  prepare-build-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Generate build matrix
+        id: matrix
+        run: |
+          if [ "${{ github.event.repository.visibility }}" = "public" ]; then
+            echo 'matrix={"include":[{"platform":"linux/amd64","runner":"ubuntu-latest"},{"platform":"linux/arm64","runner":"ubuntu-22.04-arm"}]}' >> $GITHUB_OUTPUT
+          else
+            echo 'matrix={"include":[{"platform":"linux/amd64","runner":"ubuntu-latest"}]}' >> $GITHUB_OUTPUT
+          fi
+
   build:
+    needs:
+      - prepare-build-matrix
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-latest
-          # ARM builds only for public repos (private repos don't support ARM runners)
-          - platform: linux/arm64
-            runner: ubuntu-22.04-arm
-            public_only: true
+      matrix: ${{ fromJSON(needs.prepare-build-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    # Skip ARM builds for private repos
-    if: ${{ !matrix.public_only || github.event.repository.visibility == 'public' }}
     permissions:
       contents: read
       packages: write
