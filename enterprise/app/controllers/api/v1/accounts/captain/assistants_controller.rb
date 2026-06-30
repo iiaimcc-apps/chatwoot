@@ -35,7 +35,15 @@ class Api::V1::Accounts::Captain::AssistantsController < Api::V1::Accounts::Base
                  )
                end
 
-    render json: response
+    render json: normalize_playground_response(response)
+  rescue StandardError => e
+    Rails.logger.error "[Captain Playground] Error: #{e.message}"
+    Rails.logger.error e.backtrace.first(10).join("\n")
+    render json: {
+      error: true,
+      error_message: e.message,
+      response: 'conversation_handoff'
+    }, status: :ok
   end
 
   def tools
@@ -97,5 +105,21 @@ class Api::V1::Accounts::Captain::AssistantsController < Api::V1::Accounts::Base
 
   def captain_v2_enabled?
     @assistant.account.feature_enabled?('captain_integration_v2')
+  end
+
+  def normalize_playground_response(response)
+    return response unless error_handoff_response?(response)
+
+    {
+      'error' => true,
+      'error_message' => response['reasoning'],
+      'response' => response['response']
+    }
+  end
+
+  def error_handoff_response?(response)
+    response.is_a?(Hash) &&
+      response['response'] == 'conversation_handoff' &&
+      response['reasoning']&.start_with?('Error occurred:')
   end
 end

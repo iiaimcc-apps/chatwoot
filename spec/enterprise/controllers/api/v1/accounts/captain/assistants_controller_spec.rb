@@ -366,6 +366,63 @@ RSpec.describe 'Api::V1::Accounts::Captain::Assistants', type: :request do
           message_history: params_with_latest_message[:message_history]
         )
       end
+
+      it 'returns error details instead of conversation_handoff when an error occurs' do
+        allow(Captain::Assistant::AgentRunnerService).to receive(:new).with(
+          assistant: assistant,
+          source: 'playground'
+        ).and_return(agent_runner_service)
+        allow(agent_runner_service).to receive(:generate_response).and_return(
+          { 'response' => 'conversation_handoff', 'reasoning' => 'Error occurred: Connection timed out', 'handoff_tool_called' => false }
+        )
+
+        post "/api/v1/accounts/#{account.id}/captain/assistants/#{assistant.id}/playground",
+             params: valid_params,
+             headers: agent.create_new_auth_token,
+             as: :json
+
+        expect(response).to have_http_status(:success)
+        expect(json_response[:error]).to be true
+        expect(json_response[:error_message]).to eq('Error occurred: Connection timed out')
+        expect(json_response[:response]).to eq('conversation_handoff')
+      end
+
+      it 'passes through legitimate handoff responses unchanged' do
+        allow(Captain::Assistant::AgentRunnerService).to receive(:new).with(
+          assistant: assistant,
+          source: 'playground'
+        ).and_return(agent_runner_service)
+        allow(agent_runner_service).to receive(:generate_response).and_return(
+          { 'response' => 'conversation_handoff', 'reasoning' => 'User requested human agent', 'handoff_tool_called' => true }
+        )
+
+        post "/api/v1/accounts/#{account.id}/captain/assistants/#{assistant.id}/playground",
+             params: valid_params,
+             headers: agent.create_new_auth_token,
+             as: :json
+
+        expect(response).to have_http_status(:success)
+        expect(json_response[:error]).to be_nil
+        expect(json_response[:response]).to eq('conversation_handoff')
+        expect(json_response[:reasoning]).to eq('User requested human agent')
+      end
+
+      it 'returns error details when the service raises an unhandled exception' do
+        allow(Captain::Assistant::AgentRunnerService).to receive(:new).with(
+          assistant: assistant,
+          source: 'playground'
+        ).and_return(agent_runner_service)
+        allow(agent_runner_service).to receive(:generate_response).and_raise(StandardError, 'Connection timed out')
+
+        post "/api/v1/accounts/#{account.id}/captain/assistants/#{assistant.id}/playground",
+             params: valid_params,
+             headers: agent.create_new_auth_token,
+             as: :json
+
+        expect(response).to have_http_status(:success)
+        expect(json_response[:error]).to be true
+        expect(json_response[:error_message]).to eq('Connection timed out')
+      end
     end
   end
 end
