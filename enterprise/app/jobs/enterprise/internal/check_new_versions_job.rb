@@ -9,6 +9,7 @@ module Enterprise::Internal::CheckNewVersionsJob
 
   def update_plan_info
     return if @instance_info.blank?
+    return if ActiveModel::Type::Boolean.new.cast(ENV.fetch('SKIP_PLAN_SYNC', false))
 
     update_installation_config(key: 'INSTALLATION_PRICING_PLAN', value: @instance_info['plan'])
     update_installation_config(key: 'INSTALLATION_PRICING_PLAN_QUANTITY', value: @instance_info['plan_quantity'])
